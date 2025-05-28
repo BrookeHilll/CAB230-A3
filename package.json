@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.2",
     "cookie-parser": "~1.4.4",
     "cors": "^2.8.5",
     "debug": "^4.3.4",
@@ -18,7 +19,7 @@
     "knex": "^3.1.0",
     "morgan": "~1.9.1",
     "mysql2": "^3.14.1",
-    "swagger-ui-express": "^5.0.1",
-    "npm": "^10.5.2"
+    "npm": "^10.5.2",
+    "swagger-ui-express": "^5.0.1"
   }
 }

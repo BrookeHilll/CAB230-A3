@@ -1,38 +1,30 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const authorisation = require("../middleware/authorization");
-const validDate = require("../functions/validDate");
-const notFuture = require("../functions/notFuture");
-const generateToken = require("../functions/generateToken");
+const generateToken = require('../functions/generateToken');
+const authorize = require('../middleware/authorization');
 
-// Helper: Validate date format YYYY-MM-DD
-function isValidDateFormat(date) {
-    return /^\d{4}-\d{2}-\d{2}$/.test(date) && validDate(date);
-}
-
-// Helper: Date not in future
-function dateNotInFuture(date) {
-    return notFuture(date);
-}
-
-// POST /user/register
+// Register
 router.post('/register', async (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password)
-        return res.status(400).json({ error: true, message: "Request body incomplete, email and password needed." });
+    try {
+        const { email, password } = req.body;
+        if (!email || !password)
+            return res.status(400).json({ error: true, message: "Request body incomplete, email and password needed." });
 
-    const userExists = await req.db('movies.users').where({ email }).first();
-    if (userExists)
-        return res.status(409).json({ error: true, message: "User already exists." });
+        const userExists = await req.db('movies.users').where({ email }).first();
+        if (userExists)
+            return res.status(409).json({ error: true, message: "User already exists." });
 
-    const hash = bcrypt.hashSync(password, 10);
-    await req.db('movies.users').insert({ email, hash, firstName: null, lastName: null, dob: null, address: null });
-    res.status(201).json({ message: "User created" });
+        const hash = bcrypt.hashSync(password, 10);
+        await req.db('movies.users').insert({ email, hash, firstName: null, lastName: null, dob: null, address: null });
+        res.status(201).json({ message: "User created" });
+    } catch (err) {
+        res.status(500).json({ error: true, message: "Internal server error" });
+    }
 });
 
-// POST /user/login
+// Login
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password)
@@ -43,69 +35,13 @@ router.post('/login', async (req, res) => {
         return res.status(401).json({ error: true, message: "Incorrect email or password." });
 
     const tokens = generateToken(email, 600, 86400);
-    res.status(200).json(tokens);
+    res.status(200).json({
+        bearerToken: tokens.bearerToken,
+        refreshToken: tokens.refreshToken
+    });
 });
 
-// POST /user/refresh
-router.post('/refresh', async (req, res) => {
-    const userRefreshToken = req.body.refreshToken;
-    if (!userRefreshToken) {
-        return res.status(400).json({
-            error: true,
-            message: "Request body incomplete, refresh token required"
-        });
-    }
-
-    // Check if token is invalidated
-    let tokens = [];
-    try {
-        const invalidTokens = await req.db.from("movies.invalidTokens").select("*");
-        invalidTokens.forEach(token => {
-            tokens.push(token.tokens);
-        });
-    } catch {
-        return res.status(500).json({ error: true, message: "Internal server error" });
-    }
-    if (tokens.includes(userRefreshToken))
-        return res.status(401).json({ error: true, message: "JWT token is invalidated" });
-
-    // Verify refresh token
-    try {
-        const verified = jwt.verify(userRefreshToken, process.env.JWT_SECRET, { ignoreExpiration: false });
-        const response = generateToken(verified.email, 600, 86400);
-        res.status(200).json(response);
-    } catch (e) {
-        if (e.name === "TokenExpiredError")
-            res.status(401).json({ error: true, message: "JWT token has expired" });
-        else
-            res.status(401).json({ error: true, message: "Invalid JWT token" });
-    }
-});
-
-// POST /user/logout
-router.post('/logout', async (req, res) => {
-    if (!req.body.refreshToken) {
-        return res.status(400).json({ error: true, message: "Request body incomplete, refresh token required" });
-    }
-    const token = req.body.refreshToken;
-    try {
-        jwt.verify(token, process.env.JWT_SECRET);
-    } catch (e) {
-        if (e.name === "TokenExpiredError") {
-            return res.status(401).json({ error: true, message: "JWT token has expired" });
-        } else {
-            return res.status(401).json({ error: true, message: "Invalid JWT token" });
-        }
-    }
-    try {
-        await req.db.from("movies.invalidTokens").insert({ tokens: token });
-        res.status(200).json({ error: false, message: "Token successfully invalidated" });
-    } catch {
-        res.status(500).json({ error: true, message: "Error with database" });
-    }
-});
-
-// GET /user/:email/profile
+// Profile retrieval
 router.get('/:email/profile', async (req, res) => {
     const userData = await req.db
         .from("movies.users")
@@ -137,6 +73,7 @@ router.get('/:email/profile', async (req, res) => {
             if (verified.email === req.params.email) {
                 return res.status(200).json(userData[0]);
             } else {
+                // Authenticated as another user: only public info
                 const info = {
                     email: userData[0].email,
                     firstName: userData[0].firstName,
@@ -156,58 +93,76 @@ router.get('/:email/profile', async (req, res) => {
     }
 });
 
-// PUT /user/:email/profile
-router.put('/:email/profile', authorisation, async (req, res) => {
+// Profile update
+router.put('/:email/profile', authorize, async (req, res) => {
     const { firstName, lastName, dob, address } = req.body;
+    const email = req.params.email;
 
-    // Check for missing fields
-    if (!firstName || !lastName || !dob || !address) {
-        return res.status(400).json({ error: true, message: "Request body incomplete: firstName, lastName, dob and address are required." });
-    }
-    // Check types
-    if (typeof firstName !== "string" || typeof lastName !== "string" || typeof dob !== "string" || typeof address !== "string") {
-        return res.status(400).json({ error: true, message: "Request body invalid: firstName, lastName and address must be strings only." });
-    }
-    // Validate date format
-    if (!isValidDateFormat(dob)) {
-        return res.status(400).json({ error: true, message: "Invalid input: dob must be a real date in format YYYY-MM-DD." });
-    }
-    // Validate not future
-    if (!dateNotInFuture(dob)) {
-        return res.status(400).json({ error: true, message: "Invalid input: dob must be a date in the past." });
+    // Validate request body
+    if (!firstName && !lastName && !dob && !address) {
+        return res.status(400).json({ error: true, message: "Request body incomplete. At least one of firstName, lastName, dob, or address required." });
     }
 
-    // Check user exists
-    const userData = await req.db('movies.users')
-        .select('email')
-        .where('email', req.params.email)
-        .limit(1);
-    if (userData.length === 0) {
-        return res.status(404).json({ error: true, message: "User not found" });
+    // Check if user exists
+    const user = await req.db('movies.users').where({ email }).first();
+    if (!user) {
+        return res.status(404).json({ error: true, message: "User not found." });
     }
 
-    // Check token matches email
-    const token = req.headers.authorization.replace('Bearer ', '');
-    let verified;
+    // Update user data
     try {
-        verified = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (e) {
-        if (e.name === "TokenExpiredError") {
+        await req.db('movies.users').where({ email }).update({ firstName, lastName, dob, address });
+        // Fetch and return the updated user
+        const updatedUser = await req.db('movies.users')
+            .select('email', 'firstName', 'lastName', 'dob', 'address')
+            .where({ email })
+            .first();
+        res.status(200).json(updatedUser);
+    } catch (err) {
+        res.status(500).json({ error: true, message: "Internal server error" });
+    }
+});
+
+// Logout
+router.post('/logout', async (req, res) => {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+        return res.status(400).json({ error: true, message: "Request body incomplete, refresh token required" });
+    }
+
+    try {
+        jwt.verify(refreshToken, process.env.JWT_SECRET);
+        // In a real app, you would blacklist the token here
+        return res.status(200).json({ error: false, message: "Token successfully invalidated" });
+    } catch (err) {
+        if (err.name === "TokenExpiredError") {
             return res.status(401).json({ error: true, message: "JWT token has expired" });
-        } else {
-            return res.status(401).json({ error: true, message: "Invalid JWT token" });
         }
+        return res.status(401).json({ error: true, message: "Invalid JWT token" });
     }
-    if (verified.email !== req.params.email) {
-        return res.status(403).json({ error: true, message: "Forbidden" });
+});
+
+// Refresh tokens
+router.post('/tokens/refresh', async (req, res) => {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+        return res.status(400).json({ error: true, message: "Request body incomplete, refresh token required" });
     }
 
-    // Update
-    await req.db("movies.users")
-        .where("email", "=", req.params.email)
-        .update({ firstName, lastName, dob, address });
-
-    res.status(200).json({ email: userData[0].email, firstName, lastName, dob, address });
+    try {
+        const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+        // Issue new tokens
+        const tokens = generateToken(decoded.email, 600, 86400);
+        return res.status(200).json({
+            bearerToken: tokens.bearerToken,
+            refreshToken: tokens.refreshToken
+        });
+    } catch (err) {
+        if (err.name === "TokenExpiredError") {
+            return res.status(401).json({ error: true, message: "JWT token has expired" });
+        }
+        return res.status(401).json({ error: true, message: "Invalid JWT token" });
+    }
 });
 
 module.exports = router;

@@ -18,8 +18,8 @@ router.get('/:id', authorisation, async (req, res) => {
             .select(
                 "nconst AS id",
                 "primaryName AS name",
-                "birthYear",
-                "deathYear"
+                "birthYear AS birthYear",
+                "deathYear AS deathYear"
             )
             .where("nconst", id);
 
@@ -38,12 +38,19 @@ router.get('/:id', authorisation, async (req, res) => {
         person.knownForTitles = knownForArr.map(row => row.imdbID);
 
         // Get roles
-        const rolesArr = await req.db
-            .from("movies.principals")
-            .select("tconst AS imdbID", "category", "characters")
-            .where("nconst", id);
+        let rolesArr = await req.db
+            .from("movies.principals as p")
+            .leftJoin("movies.basics as b", "p.tconst", "b.tconst")
+            .select(
+                "p.tconst AS movieId",
+                "b.primaryTitle AS movieName",
+                "p.category",
+                "p.characters"
+            )
+            .where("p.nconst", id);
 
-        // Parse characters array
+        if (!Array.isArray(rolesArr)) rolesArr = [];
+
         rolesArr.forEach(role => {
             if (role.characters) {
                 role.characters = role.characters.replace(/[\[\]"]/g, '').split(',').filter(c => c);
@@ -56,6 +63,7 @@ router.get('/:id', authorisation, async (req, res) => {
 
         res.json(person);
     } catch (err) {
+        console.error("People route error:", err);
         res.status(500).json({ error: true, message: "Error with database" });
     }
 });

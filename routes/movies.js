@@ -67,12 +67,12 @@ router.get("/search", async (req, res) => {
         const pagination = {
             total: resultLength,
             lastPage: lastPage,
-            prevPage: page > 1 && page <= lastPage ? page - 1 : null,
+            prevPage: page > 1 && page > lastPage ? lastPage : (page > 1 && page <= lastPage ? page - 1 : null),
             nextPage: page < lastPage ? page + 1 : null,
             perPage: perPage,
             currentPage: page,
             from: resultLength === 0 ? 0 : startIndex,
-            to: resultLength === 0 ? 0 : Math.min(endIndex, resultLength)
+            to: resultLength === 0 ? 0 : startIndex + slicedRows.length
         };
 
         res.json({
